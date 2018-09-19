@@ -6,9 +6,10 @@
 
 @implementation RNVideoPoc
 
-// CREDIT / heavily borrowed from:
+// Credit to / heavily borrowed from:
 // Merging - https://github.com/MostWantIT/react-native-video-editor
 // Thumbnails - https://github.com/phuochau/react-native-thumbnail
+// Trimming - https://github.com/shahen94/react-native-video-processing
 
 - (dispatch_queue_t)methodQueue
 {
@@ -77,6 +78,8 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
     }
 
     NSString* documentsDirectory= [self applicationDocumentsDirectory];
+    
+    // TODO - ensure this is not overwriting other videos
     NSString * myDocumentPath = [documentsDirectory stringByAppendingPathComponent:@"merged_video.mp4"];
     NSURL * urlVideoMain = [[NSURL alloc] initFileURLWithPath: myDocumentPath];
 
@@ -118,7 +121,7 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
 }
 
 
-RCT_EXPORT_METHOD(get:(NSString *)filepath resolve:(RCTPromiseResolveBlock)resolve
+RCT_EXPORT_METHOD(getThumbnail:(NSString *)filepath resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
 {
     @try {
@@ -166,4 +169,50 @@ RCT_EXPORT_METHOD(get:(NSString *)filepath resolve:(RCTPromiseResolveBlock)resol
     }
 }
 
+RCT_EXPORT_METHOD(trim:(NSString *)filepath resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject) {
+    @try {
+        filepath = [filepath stringByReplacingOccurrencesOfString:@"file://"
+                                                       withString:@""];
+        NSURL *vidURL = [NSURL fileURLWithPath:filepath];
+
+        AVURLAsset *asset = [[AVURLAsset alloc] initWithURL:vidURL options:nil];
+        AVAssetExportSession *exporter = [[AVAssetExportSession alloc] initWithAsset:asset presetName:AVAssetExportPresetHighestQuality];
+
+        NSString* documentsDirectory= [self applicationDocumentsDirectory];
+        NSString * fullPath = [documentsDirectory stringByAppendingPathComponent: [NSString stringWithFormat:@"trimmedVideo-%@.mp4", [[NSProcessInfo processInfo] globallyUniqueString]]];
+        NSURL * urlVideoMain = [[NSURL alloc] initFileURLWithPath: fullPath];
+
+        exporter.outputURL = urlVideoMain;
+        exporter.outputFileType = @"com.apple.quicktime-movie";
+        exporter.shouldOptimizeForNetworkUse = YES;
+
+        // TODO - pass dict in params and use to set times
+        exporter.timeRange = CMTimeRangeMake(kCMTimeZero, asset.duration);
+        
+        [exporter exportAsynchronouslyWithCompletionHandler:^{
+            
+            switch ([exporter status])
+            {
+                case AVAssetExportSessionStatusFailed:
+                    // TODO - make rejection
+                    resolve(@{ @"failed" : fullPath});
+                    break;
+                case AVAssetExportSessionStatusCancelled:
+                    // TODO - make rejection
+                    resolve(@{ @"cancel" : fullPath});
+                    break;
+                    
+                case AVAssetExportSessionStatusCompleted:
+                    resolve(@{ @"path" : fullPath});
+                    break;
+                    
+                default:
+                    break;
+            }
+        }];
+    } @catch(NSException *e) {
+        reject(e.reason, nil, nil);
+    }
+}
 @end
