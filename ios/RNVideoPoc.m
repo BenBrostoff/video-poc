@@ -146,7 +146,7 @@ RCT_EXPORT_METHOD(getThumbnail:(NSString *)filepath resolve:(RCTPromiseResolveBl
 
         // save to Expo
         NSString* documentsDirectory= [self applicationDocumentsDirectory];
-        NSString * fullPath = [documentsDirectory stringByAppendingPathComponent: [NSString stringWithFormat:@"thumbTew-%@.jpg", [[NSProcessInfo processInfo] globallyUniqueString]]];
+        NSString * fullPath = [documentsDirectory stringByAppendingPathComponent: [NSString stringWithFormat:@"thumbNail-%@.jpg", [[NSProcessInfo processInfo] globallyUniqueString]]];
         NSURL * someURL = [[NSURL alloc] initFileURLWithPath: fullPath];
         NSString* finalPath = someURL.absoluteString;
 
@@ -169,7 +169,10 @@ RCT_EXPORT_METHOD(getThumbnail:(NSString *)filepath resolve:(RCTPromiseResolveBl
     }
 }
 
-RCT_EXPORT_METHOD(trim:(NSString *)filepath resolve:(RCTPromiseResolveBlock)resolve
+RCT_EXPORT_METHOD(trim:(NSString *)filepath
+                  startTime:(NSNumber * __nonnull)startTime
+                  endTime:(NSNumber * __nonnull )endTime
+                  resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject) {
     @try {
         filepath = [filepath stringByReplacingOccurrencesOfString:@"file://"
@@ -187,8 +190,14 @@ RCT_EXPORT_METHOD(trim:(NSString *)filepath resolve:(RCTPromiseResolveBlock)reso
         exporter.outputFileType = @"com.apple.quicktime-movie";
         exporter.shouldOptimizeForNetworkUse = YES;
 
-        // TODO - pass dict in params and use to set times
-        exporter.timeRange = CMTimeRangeMake(kCMTimeZero, asset.duration);
+        int64_t sTime = startTime.doubleValue;
+        int64_t eTime = endTime.doubleValue;
+
+        // Numerator / Denom -> Seconds, pass sTime and eTime in seconds
+        CMTime convertedStartTime = CMTimeMake(sTime, 1);
+        CMTime convertedEndTime = CMTimeMake(eTime, 1);
+
+        exporter.timeRange = CMTimeRangeMake(convertedStartTime, convertedEndTime);
         
         [exporter exportAsynchronouslyWithCompletionHandler:^{
             
