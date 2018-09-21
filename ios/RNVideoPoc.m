@@ -1,6 +1,7 @@
 
 #import "RNVideoPoc.h"
 #import "RCTLog.h"
+#import "RCTConvert.h"
 #import <AVFoundation/AVFoundation.h>
 #import <AssetsLibrary/AssetsLibrary.h>
 
@@ -170,8 +171,7 @@ RCT_EXPORT_METHOD(getThumbnail:(NSString *)filepath resolve:(RCTPromiseResolveBl
 }
 
 RCT_EXPORT_METHOD(trim:(NSString *)filepath
-                  startTime:(NSNumber * __nonnull)startTime
-                  endTime:(NSNumber * __nonnull )endTime
+                  options:(NSDictionary *)options
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject) {
     @try {
@@ -189,6 +189,9 @@ RCT_EXPORT_METHOD(trim:(NSString *)filepath
         exporter.outputURL = urlVideoMain;
         exporter.outputFileType = @"com.apple.quicktime-movie";
         exporter.shouldOptimizeForNetworkUse = YES;
+
+        NSNumber *startTime = [RCTConvert NSNumber:options[@"startTime"]];
+        NSNumber *endTime = [RCTConvert NSNumber:options[@"endTime"]];
 
         int64_t sTime = startTime.doubleValue;
         int64_t eTime = endTime.doubleValue;
