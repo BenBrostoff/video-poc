@@ -18,107 +18,131 @@
 }
 RCT_EXPORT_MODULE()
 
-RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
-                  errorCallback:(RCTResponseSenderBlock)failureCallback
-                  callback:(RCTResponseSenderBlock)successCallback) {
-
-    NSLog(@"%@ %@", NSStringFromClass([self class]), NSStringFromSelector(_cmd));
-
-    [self MergeVideo:fileNames callback:successCallback];
-
-    //successCallback(@[@"merge video", fileNames[0]]);
-}
-
--(void)LoopVideo:(NSArray *)fileNames callback:(RCTResponseSenderBlock)successCallback
-{
-    for (id object in fileNames)
-    {
-        NSLog(@"video: %@", object);
-    }
-}
-
--(void)MergeVideo:(NSArray *)fileNames callback:(RCTResponseSenderBlock)successCallback
-{
-    CGFloat totalDuration;
-    totalDuration = 0;
-
-    AVMutableComposition *mixComposition = [[AVMutableComposition alloc] init];
-    AVMutableCompositionTrack *videoTrack = [mixComposition addMutableTrackWithMediaType:AVMediaTypeVideo
-                                                                        preferredTrackID:kCMPersistentTrackID_Invalid];
-    AVMutableCompositionTrack *audioTrack = [mixComposition addMutableTrackWithMediaType:AVMediaTypeAudio
-                                                                        preferredTrackID:kCMPersistentTrackID_Invalid];
-
-    CMTime insertTime = kCMTimeZero;
-    CGAffineTransform originalTransform;
-
-    for (id object in fileNames)
-    {
-        AVAsset *asset = [AVAsset assetWithURL:[NSURL fileURLWithPath:object]];
-        CMTimeRange timeRange = CMTimeRangeMake(kCMTimeZero, asset.duration);
- 
-        [videoTrack insertTimeRange:timeRange
-                            ofTrack:[[asset tracksWithMediaType:AVMediaTypeVideo] objectAtIndex:0]
-                             atTime:insertTime
-                              error:nil];
-        [audioTrack insertTimeRange:timeRange
-                            ofTrack:[[asset tracksWithMediaType:AVMediaTypeAudio] objectAtIndex:0]
-                             atTime:insertTime
-                              error:nil];
-
-        insertTime = CMTimeAdd(insertTime,asset.duration);
-        
-        // Get the first track from the asset and its transform.
-        NSArray* tracks = [asset tracks];
-        AVAssetTrack* track = [tracks objectAtIndex:0];
-        originalTransform = [track preferredTransform];
-    }
-
-    // Use the transform from the original track to set the video track transform.
-    if (originalTransform.a || originalTransform.b || originalTransform.c || originalTransform.d) {
-        videoTrack.preferredTransform = originalTransform;
-    }
-
-    NSString* documentsDirectory= [self applicationDocumentsDirectory];
-    
-    // TODO - ensure this is not overwriting other videos
-    NSString * myDocumentPath = [documentsDirectory stringByAppendingPathComponent:@"merged_video.mp4"];
-    NSURL * urlVideoMain = [[NSURL alloc] initFileURLWithPath: myDocumentPath];
-
-    if([[NSFileManager defaultManager] fileExistsAtPath:myDocumentPath])
-    {
-        [[NSFileManager defaultManager] removeItemAtPath:myDocumentPath error:nil];
-    }
-
-    AVAssetExportSession *exporter = [[AVAssetExportSession alloc] initWithAsset:mixComposition presetName:AVAssetExportPresetHighestQuality];
-    exporter.outputURL = urlVideoMain;
-    exporter.outputFileType = @"com.apple.quicktime-movie";
-    exporter.shouldOptimizeForNetworkUse = YES;
-
-    [exporter exportAsynchronouslyWithCompletionHandler:^{
-        
-        switch ([exporter status])
-        {
-            case AVAssetExportSessionStatusFailed:
-                break;
-                
-            case AVAssetExportSessionStatusCancelled:
-                break;
-                
-            case AVAssetExportSessionStatusCompleted:
-                successCallback(@[@"merge video complete", myDocumentPath]);
-                break;
-                
-            default:
-                break;
-        }
-    }];
-}
-
 - (NSString*) applicationDocumentsDirectory
 {
     NSArray* paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
     NSString* basePath = ([paths count] > 0) ? [paths objectAtIndex:0] : nil;
     return basePath;
+}
+
+RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject)
+{
+    @try {
+        CGFloat totalDuration;
+        totalDuration = 0;
+        
+        AVMutableComposition *mixComposition = [[AVMutableComposition alloc] init];
+        AVMutableCompositionTrack *videoTrack = [mixComposition addMutableTrackWithMediaType:AVMediaTypeVideo
+                                                                            preferredTrackID:kCMPersistentTrackID_Invalid];
+        AVMutableCompositionTrack *audioTrack = [mixComposition addMutableTrackWithMediaType:AVMediaTypeAudio
+                                                                            preferredTrackID:kCMPersistentTrackID_Invalid];
+        
+        CMTime insertTime = kCMTimeZero;
+        CGAffineTransform originalTransform;
+        
+        for (id object in fileNames)
+        {
+             // TODO - consider using precise duration https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/AVFoundationPG/Articles/01_UsingAssets.html
+            NSString *filepath = [object stringByReplacingOccurrencesOfString:@"file://"
+                                                           withString:@""];
+            AVAsset *asset = [AVAsset assetWithURL:[NSURL fileURLWithPath:filepath]];
+            
+            dispatch_group_t videoTask = dispatch_group_create();
+            dispatch_group_enter(videoTask);
+            [asset loadValuesAsynchronouslyForKeys:@[@"playable",@"tracks",@"duration"] completionHandler:^{
+                // Now tracks and duration are available
+                NSError *error = nil;
+                AVKeyValueStatus status =
+                [asset statusOfValueForKey:@"playable" error:&error];
+                switch (status) {
+                    case AVKeyValueStatusLoaded:
+                        // Sucessfully loaded, continue processing
+                        NSLog(@"%@", error);
+                        break;
+                    case AVKeyValueStatusFailed:
+                        // Examine NSError pointer to determine failure
+                        NSLog(@"%@", error);
+                        break;
+                    case AVKeyValueStatusCancelled:
+                        // Loading cancelled
+                        NSLog(@"%@", error);
+                        break;
+                    default:
+                        // Handle all other cases
+                        NSLog(@"%@", error);
+                        break;
+                }
+                dispatch_group_leave(videoTask);
+            }];
+            
+            dispatch_group_wait(videoTask, DISPATCH_TIME_FOREVER);
+            
+            CMTimeRange timeRange = CMTimeRangeMake(kCMTimeZero, asset.duration);
+            
+            // TODO - check array access
+            [videoTrack insertTimeRange:timeRange
+                                ofTrack:[[asset tracksWithMediaType:AVMediaTypeVideo] objectAtIndex:0]
+                                 atTime:insertTime
+                                  error:nil];
+            [audioTrack insertTimeRange:timeRange
+                                ofTrack:[[asset tracksWithMediaType:AVMediaTypeAudio] objectAtIndex:0]
+                                 atTime:insertTime
+                                  error:nil];
+            
+            insertTime = CMTimeAdd(insertTime,asset.duration);
+            
+            // Get the first track from the asset and its transform.
+            NSArray* tracks = [asset tracks];
+            AVAssetTrack* track = [tracks objectAtIndex:0];
+            originalTransform = [track preferredTransform];
+        }
+        
+        // Use the transform from the original track to set the video track transform.
+        if (originalTransform.a || originalTransform.b || originalTransform.c || originalTransform.d) {
+            videoTrack.preferredTransform = originalTransform;
+        }
+        
+        NSString* documentsDirectory= [self applicationDocumentsDirectory];
+        
+        // TODO - ensure this is not overwriting other videos
+        NSString * myDocumentPath = [documentsDirectory stringByAppendingPathComponent:@"merged_video.mp4"];
+        NSURL * urlVideoMain = [[NSURL alloc] initFileURLWithPath: myDocumentPath];
+        
+        if([[NSFileManager defaultManager] fileExistsAtPath:myDocumentPath])
+        {
+            [[NSFileManager defaultManager] removeItemAtPath:myDocumentPath error:nil];
+        }
+        
+        AVAssetExportSession *exporter = [[AVAssetExportSession alloc] initWithAsset:mixComposition presetName:AVAssetExportPresetHighestQuality];
+        exporter.outputURL = urlVideoMain;
+        exporter.outputFileType = @"com.apple.quicktime-movie";
+        exporter.shouldOptimizeForNetworkUse = YES;
+        
+        [exporter exportAsynchronouslyWithCompletionHandler:^{
+            
+            switch ([exporter status])
+            {
+                case AVAssetExportSessionStatusFailed:
+                    resolve(@{ @"failed" : myDocumentPath});
+                    break;
+                    
+                case AVAssetExportSessionStatusCancelled:
+                    resolve(@{ @"cancel" : myDocumentPath});
+                    break;
+                    
+                case AVAssetExportSessionStatusCompleted:
+                    resolve(@{ @"path" : myDocumentPath});
+                    break;
+                    
+                default:
+                    break;
+            }
+        }];
+    } @catch(NSException *e) {
+        reject(e.reason, nil, nil);
+    }
 }
 
 
