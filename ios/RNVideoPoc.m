@@ -84,7 +84,7 @@ RCT_EXPORT_METHOD(trim:(NSString *)filepath
         NSURL * urlVideoMain = [[NSURL alloc] initFileURLWithPath: fullPath];
 
         exporter.outputURL = urlVideoMain;
-        exporter.outputFileType = @"com.apple.quicktime-movie";
+        exporter.outputFileType =  @"com.apple.quicktime-movie";
         exporter.shouldOptimizeForNetworkUse = YES;
 
         NSNumber *startTime = [RCTConvert NSNumber:options[@"startTime"]];
@@ -140,6 +140,9 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
         __block CGSize size = CGSizeZero;
         __block int32_t highestFrameRate = 0;
         __block BOOL isPortrait_ = NO;
+        __block BOOL setMergedOrientation = NO;
+        __block BOOL mergedOrientationPortrait = NO;
+        __block CGSize finalSize;
         [fileNames enumerateObjectsUsingBlock:^(id filepath, NSUInteger idx, BOOL *stop) {
             filepath = [filepath stringByReplacingOccurrencesOfString:@"file://"
                                                                    withString:@""];
@@ -151,7 +154,7 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
             AVAssetTrack *audioAsset = [[sourceAsset tracksWithMediaType:AVMediaTypeAudio] firstObject];
             
             size = videoAsset.naturalSize;
-            
+
             NSLog(@"Video #%lu => width: %f height: %f", idx+1, size.width, size.height);
             
             int32_t currentFrameRate = (int)roundf(videoAsset.nominalFrameRate);
@@ -170,15 +173,45 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
                 errorOccurred = YES;
             }
             
+            // Set merged video properties based on the first video
             isPortrait_ = [self isVideoPortrait:videoAsset];
+            if (!setMergedOrientation) {
+                setMergedOrientation = TRUE;
+                mergedOrientationPortrait = isPortrait_;
+                finalSize = videoAsset.naturalSize;
+            }
             
+            CGAffineTransform transform = videoAsset.preferredTransform;
+            CGAffineTransform useTransform;
+            if (isPortrait_ && mergedOrientationPortrait) {
+                // all video dimensions reflect that they are filmed in portrait
+                double scaleToFitRatio = finalSize.height/ videoTrack.naturalSize.height;
+                CGAffineTransform scale = CGAffineTransformMakeScale(scaleToFitRatio, scaleToFitRatio);
+                useTransform = CGAffineTransformConcat(transform, scale);
+            } else if (!isPortrait_ && mergedOrientationPortrait) {
+                double scaleToFitRatio = finalSize.height / videoTrack.naturalSize.width;
+                CGAffineTransform scale = CGAffineTransformMakeScale(scaleToFitRatio, scaleToFitRatio);
+                CGAffineTransform first = CGAffineTransformConcat(transform, scale); // scale
+
+                CGAffineTransform reTransform = CGAffineTransformMakeTranslation(0.0, finalSize.height / 2);
+                useTransform = CGAffineTransformConcat(first, reTransform); // move down
+            } else if (!isPortrait_ && !mergedOrientationPortrait) {
+                // do nothing for natural landscape videos
+                useTransform = videoTrack.preferredTransform;
+            } else {
+                double scaleToFitRatio = finalSize.height / videoTrack.naturalSize.width;
+                CGAffineTransform scale = CGAffineTransformMakeScale(scaleToFitRatio, scaleToFitRatio);
+                CGAffineTransform first = CGAffineTransformConcat(transform, scale); // scale
+
+                // FIXME - determine the correct transform to apply here.
+                CGAffineTransform reTransform = CGAffineTransformMakeTranslation(finalSize.width / 3.0, 0.0);
+                useTransform = CGAffineTransformConcat(first, reTransform); // move right
+            }
+
             AVMutableVideoCompositionInstruction *videoCompositionInstruction = [AVMutableVideoCompositionInstruction videoCompositionInstruction];
-            
             videoCompositionInstruction.timeRange = CMTimeRangeMake(currentTime, timeRange.duration);
-            
             AVMutableVideoCompositionLayerInstruction *videoLayerInstruction = [AVMutableVideoCompositionLayerInstruction videoCompositionLayerInstructionWithAssetTrack:videoTrack];
-            
-            [videoLayerInstruction setTransform:videoAsset.preferredTransform atTime:currentTime];
+            [videoLayerInstruction setTransform:useTransform atTime:currentTime];
             videoCompositionInstruction.layerInstructions = @[videoLayerInstruction];
             [instructions addObject:videoCompositionInstruction];
             currentTime = CMTimeAdd(currentTime, timeRange.duration);
@@ -201,13 +234,22 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
         AVMutableVideoComposition *mutableVideoComposition = [AVMutableVideoComposition videoComposition];
         mutableVideoComposition.instructions = instructions;
         mutableVideoComposition.frameDuration = CMTimeMake(1, highestFrameRate);
-        CGSize naturalSize;
-        if (isPortrait_) {
-            naturalSize = CGSizeMake(size.height, size.width);
+//        CGSize naturalSize;
+        mutableVideoComposition.renderSize = CGSizeMake(UIScreen.mainScreen.bounds.size.width, UIScreen.mainScreen.bounds.size.height);
+
+        if (mergedOrientationPortrait) {
+            mutableVideoComposition.renderSize = CGSizeMake(UIScreen.mainScreen.bounds.size.width, UIScreen.mainScreen.bounds.size.height);
+        } else {
+            mutableVideoComposition.renderSize = size;
+        }
+
+        if (mergedOrientationPortrait) {
+            CGSize naturalSize = CGSizeMake(size.height, size.width);
             mutableVideoComposition.renderSize =  CGSizeMake(naturalSize.width, naturalSize.height);
         } else {
             mutableVideoComposition.renderSize = size;
         }
+
         exportSession.videoComposition = mutableVideoComposition;
         
         NSLog(@"Composition Duration: %ld seconds", lround(CMTimeGetSeconds(composition.duration)));
@@ -276,7 +318,7 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
     {
         isPortrait = FALSE;
     }
-    //  }
+
     return isPortrait;
 }
 
