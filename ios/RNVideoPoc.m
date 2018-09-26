@@ -9,6 +9,7 @@
 
 // Credit to / heavily borrowed from:
 // Merging - https://github.com/MostWantIT/react-native-video-editor
+// Merging with video orientation - https://gist.github.com/javiersuazo/bb36083bdaa0a51d52323d997a84712e
 // Thumbnails - https://github.com/phuochau/react-native-thumbnail
 // Trimming - https://github.com/shahen94/react-native-video-processing
 
@@ -17,134 +18,6 @@
     return dispatch_get_main_queue();
 }
 RCT_EXPORT_MODULE()
-
-- (NSString*) applicationDocumentsDirectory
-{
-    NSArray* paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-    NSString* basePath = ([paths count] > 0) ? [paths objectAtIndex:0] : nil;
-    return basePath;
-}
-
-RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
-                  resolve:(RCTPromiseResolveBlock)resolve
-                  reject:(RCTPromiseRejectBlock)reject)
-{
-    @try {
-        CGFloat totalDuration;
-        totalDuration = 0;
-        
-        AVMutableComposition *mixComposition = [[AVMutableComposition alloc] init];
-        AVMutableCompositionTrack *videoTrack = [mixComposition addMutableTrackWithMediaType:AVMediaTypeVideo
-                                                                            preferredTrackID:kCMPersistentTrackID_Invalid];
-        AVMutableCompositionTrack *audioTrack = [mixComposition addMutableTrackWithMediaType:AVMediaTypeAudio
-                                                                            preferredTrackID:kCMPersistentTrackID_Invalid];
-        
-        CMTime insertTime = kCMTimeZero;
-        CGAffineTransform originalTransform;
-        
-        for (id object in fileNames)
-        {
-             // TODO - consider using precise duration https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/AVFoundationPG/Articles/01_UsingAssets.html
-            NSString *filepath = [object stringByReplacingOccurrencesOfString:@"file://"
-                                                           withString:@""];
-            AVAsset *asset = [AVAsset assetWithURL:[NSURL fileURLWithPath:filepath]];
-            
-            dispatch_group_t videoTask = dispatch_group_create();
-            dispatch_group_enter(videoTask);
-            [asset loadValuesAsynchronouslyForKeys:@[@"playable",@"tracks",@"duration"] completionHandler:^{
-                // Now tracks and duration are available
-                NSError *error = nil;
-                AVKeyValueStatus status =
-                [asset statusOfValueForKey:@"playable" error:&error];
-                switch (status) {
-                    case AVKeyValueStatusLoaded:
-                        // Sucessfully loaded, continue processing
-                        NSLog(@"%@", error);
-                        break;
-                    case AVKeyValueStatusFailed:
-                        // Examine NSError pointer to determine failure
-                        NSLog(@"%@", error);
-                        break;
-                    case AVKeyValueStatusCancelled:
-                        // Loading cancelled
-                        NSLog(@"%@", error);
-                        break;
-                    default:
-                        // Handle all other cases
-                        NSLog(@"%@", error);
-                        break;
-                }
-                dispatch_group_leave(videoTask);
-            }];
-            
-            dispatch_group_wait(videoTask, DISPATCH_TIME_FOREVER);
-            
-            CMTimeRange timeRange = CMTimeRangeMake(kCMTimeZero, asset.duration);
-            
-            // TODO - check array access
-            [videoTrack insertTimeRange:timeRange
-                                ofTrack:[[asset tracksWithMediaType:AVMediaTypeVideo] objectAtIndex:0]
-                                 atTime:insertTime
-                                  error:nil];
-            [audioTrack insertTimeRange:timeRange
-                                ofTrack:[[asset tracksWithMediaType:AVMediaTypeAudio] objectAtIndex:0]
-                                 atTime:insertTime
-                                  error:nil];
-            
-            insertTime = CMTimeAdd(insertTime,asset.duration);
-            
-            // Get the first track from the asset and its transform.
-            NSArray* tracks = [asset tracks];
-            AVAssetTrack* track = [tracks objectAtIndex:0];
-            originalTransform = [track preferredTransform];
-        }
-        
-        // Use the transform from the original track to set the video track transform.
-        if (originalTransform.a || originalTransform.b || originalTransform.c || originalTransform.d) {
-            videoTrack.preferredTransform = originalTransform;
-        }
-        
-        NSString* documentsDirectory= [self applicationDocumentsDirectory];
-        
-        // TODO - ensure this is not overwriting other videos
-        NSString * myDocumentPath = [documentsDirectory stringByAppendingPathComponent:@"merged_video.mp4"];
-        NSURL * urlVideoMain = [[NSURL alloc] initFileURLWithPath: myDocumentPath];
-        
-        if([[NSFileManager defaultManager] fileExistsAtPath:myDocumentPath])
-        {
-            [[NSFileManager defaultManager] removeItemAtPath:myDocumentPath error:nil];
-        }
-        
-        AVAssetExportSession *exporter = [[AVAssetExportSession alloc] initWithAsset:mixComposition presetName:AVAssetExportPresetHighestQuality];
-        exporter.outputURL = urlVideoMain;
-        exporter.outputFileType = @"com.apple.quicktime-movie";
-        exporter.shouldOptimizeForNetworkUse = YES;
-        
-        [exporter exportAsynchronouslyWithCompletionHandler:^{
-            
-            switch ([exporter status])
-            {
-                case AVAssetExportSessionStatusFailed:
-                    resolve(@{ @"failed" : myDocumentPath});
-                    break;
-                    
-                case AVAssetExportSessionStatusCancelled:
-                    resolve(@{ @"cancel" : myDocumentPath});
-                    break;
-                    
-                case AVAssetExportSessionStatusCompleted:
-                    resolve(@{ @"path" : myDocumentPath});
-                    break;
-                    
-                default:
-                    break;
-            }
-        }];
-    } @catch(NSException *e) {
-        reject(e.reason, nil, nil);
-    }
-}
-
 
 RCT_EXPORT_METHOD(getThumbnail:(NSString *)filepath resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject)
@@ -227,11 +100,11 @@ RCT_EXPORT_METHOD(trim:(NSString *)filepath
         exporter.timeRange = CMTimeRangeMake(convertedStartTime, convertedEndTime);
         
         [exporter exportAsynchronouslyWithCompletionHandler:^{
-            
             switch ([exporter status])
             {
                 case AVAssetExportSessionStatusFailed:
                     // TODO - make rejection
+                    NSLog(@"%@", exporter.error);
                     resolve(@{ @"failed" : fullPath});
                     break;
                 case AVAssetExportSessionStatusCancelled:
@@ -251,4 +124,160 @@ RCT_EXPORT_METHOD(trim:(NSString *)filepath
         reject(e.reason, nil, nil);
     }
 }
+
+RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
+                  resolve:(RCTPromiseResolveBlock)resolve
+                  reject:(RCTPromiseRejectBlock)reject){
+    
+    @try {
+        AVMutableComposition *composition = [[AVMutableComposition alloc] init];
+        AVMutableCompositionTrack *videoTrack = [composition addMutableTrackWithMediaType:AVMediaTypeVideo preferredTrackID:kCMPersistentTrackID_Invalid];
+        AVMutableCompositionTrack *audioTrack = [composition addMutableTrackWithMediaType:AVMediaTypeAudio preferredTrackID:kCMPersistentTrackID_Invalid];
+        NSMutableArray *instructions = [NSMutableArray new];
+        
+        __block BOOL errorOccurred = NO;
+        __block CMTime currentTime = kCMTimeZero;
+        __block CGSize size = CGSizeZero;
+        __block int32_t highestFrameRate = 0;
+        __block BOOL isPortrait_ = NO;
+        [fileNames enumerateObjectsUsingBlock:^(id filepath, NSUInteger idx, BOOL *stop) {
+            filepath = [filepath stringByReplacingOccurrencesOfString:@"file://"
+                                                                   withString:@""];
+            NSURL *fileURL = [NSURL fileURLWithPath:filepath];
+
+            NSDictionary *options = @{AVURLAssetPreferPreciseDurationAndTimingKey:@YES};
+            AVURLAsset *sourceAsset = [AVURLAsset URLAssetWithURL:fileURL options:options];
+            AVAssetTrack *videoAsset = [[sourceAsset tracksWithMediaType:AVMediaTypeVideo] firstObject];
+            AVAssetTrack *audioAsset = [[sourceAsset tracksWithMediaType:AVMediaTypeAudio] firstObject];
+            
+            size = videoAsset.naturalSize;
+            
+            NSLog(@"Video #%lu => width: %f height: %f", idx+1, size.width, size.height);
+            
+            int32_t currentFrameRate = (int)roundf(videoAsset.nominalFrameRate);
+            highestFrameRate = (currentFrameRate > highestFrameRate) ? currentFrameRate : highestFrameRate;
+            
+            NSLog(@"* %@ (%dfps)", [fileURL lastPathComponent], currentFrameRate);
+            
+            CMTime trimmingTime = CMTimeMake(lround(videoAsset.naturalTimeScale / videoAsset.nominalFrameRate), videoAsset.naturalTimeScale);
+            CMTimeRange timeRange = CMTimeRangeMake(trimmingTime, CMTimeSubtract(videoAsset.timeRange.duration, trimmingTime));
+            
+            NSError *videoError;
+            BOOL videoResult = [videoTrack insertTimeRange:timeRange ofTrack:videoAsset atTime:currentTime error:&videoError];
+            NSError *audioError;
+            BOOL audioResult = [audioTrack insertTimeRange:timeRange ofTrack:audioAsset atTime:currentTime error:&audioError];
+            if(!videoResult || !audioResult || videoError || audioError) {
+                errorOccurred = YES;
+            }
+            
+            isPortrait_ = [self isVideoPortrait:videoAsset];
+            
+            AVMutableVideoCompositionInstruction *videoCompositionInstruction = [AVMutableVideoCompositionInstruction videoCompositionInstruction];
+            
+            videoCompositionInstruction.timeRange = CMTimeRangeMake(currentTime, timeRange.duration);
+            
+            AVMutableVideoCompositionLayerInstruction *videoLayerInstruction = [AVMutableVideoCompositionLayerInstruction videoCompositionLayerInstructionWithAssetTrack:videoTrack];
+            
+            [videoLayerInstruction setTransform:videoAsset.preferredTransform atTime:currentTime];
+            videoCompositionInstruction.layerInstructions = @[videoLayerInstruction];
+            [instructions addObject:videoCompositionInstruction];
+            currentTime = CMTimeAdd(currentTime, timeRange.duration);
+        }];
+        
+        if (errorOccurred == YES) {
+            reject(@"Error adding video or audio", nil, nil);
+        }
+    
+        AVAssetExportSession *exportSession = [[AVAssetExportSession alloc] initWithAsset:composition presetName:AVAssetExportPresetHighestQuality];
+
+        NSString* documentsDirectory= [self applicationDocumentsDirectory];
+        NSString * myDocumentPath = [documentsDirectory stringByAppendingPathComponent: [NSString stringWithFormat:@"merged_video-%@.mp4", [[NSProcessInfo processInfo] globallyUniqueString]]];
+        NSURL * urlVideoMain = [[NSURL alloc] initFileURLWithPath: myDocumentPath];
+
+        exportSession.outputURL = urlVideoMain;
+        exportSession.outputFileType = AVFileTypeMPEG4;
+        exportSession.shouldOptimizeForNetworkUse = YES;
+
+        AVMutableVideoComposition *mutableVideoComposition = [AVMutableVideoComposition videoComposition];
+        mutableVideoComposition.instructions = instructions;
+        mutableVideoComposition.frameDuration = CMTimeMake(1, highestFrameRate);
+        CGSize naturalSize;
+        if (isPortrait_) {
+            naturalSize = CGSizeMake(size.height, size.width);
+            mutableVideoComposition.renderSize =  CGSizeMake(naturalSize.width, naturalSize.height);
+        } else {
+            mutableVideoComposition.renderSize = size;
+        }
+        exportSession.videoComposition = mutableVideoComposition;
+        
+        NSLog(@"Composition Duration: %ld seconds", lround(CMTimeGetSeconds(composition.duration)));
+        NSLog(@"Composition Framerate: %d fps", highestFrameRate);
+
+        __block NSError *someErr = nil;
+        [exportSession exportAsynchronouslyWithCompletionHandler:^{
+            switch (exportSession.status) {
+                case AVAssetExportSessionStatusFailed:{
+                    someErr = exportSession.error;
+                    reject(someErr.description, nil, nil);
+                    break;
+                }
+                case AVAssetExportSessionStatusCancelled:{
+                    someErr = exportSession.error;
+                    reject(someErr.description, nil, nil);
+                    break;
+                }
+                case AVAssetExportSessionStatusCompleted: {
+                    resolve(@{ @"path" : myDocumentPath});
+                    break;
+                }
+                case AVAssetExportSessionStatusUnknown: {
+                    NSLog(@"Export Status: Unknown");
+                }
+                case AVAssetExportSessionStatusExporting : {
+                    NSLog(@"Export Status: Exporting");
+                }
+                case AVAssetExportSessionStatusWaiting: {
+                    NSLog(@"Export Status: Waiting");
+                }
+            };
+        }];
+    } @catch(NSException *e) {
+        reject(e.reason, nil, nil);
+    }
+}
+
+- (NSString*) applicationDocumentsDirectory
+{
+    NSArray* paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
+    NSString* basePath = ([paths count] > 0) ? [paths objectAtIndex:0] : nil;
+    return basePath;
+}
+
+-(BOOL) isVideoPortrait:(AVAssetTrack *)videoTrack{
+    BOOL isPortrait = FALSE;
+    CGAffineTransform t = videoTrack.preferredTransform;
+    // Portrait
+    if(t.a == 0 && t.b == 1.0 && t.c == -1.0 && t.d == 0)
+    {
+        isPortrait = YES;
+    }
+    // PortraitUpsideDown
+    if(t.a == 0 && t.b == -1.0 && t.c == 1.0 && t.d == 0)  {
+        
+        isPortrait = YES;
+    }
+    // LandscapeRight
+    if(t.a == 1.0 && t.b == 0 && t.c == 0 && t.d == 1.0)
+    {
+        isPortrait = FALSE;
+    }
+    // LandscapeLeft
+    if(t.a == -1.0 && t.b == 0 && t.c == 0 && t.d == -1.0)
+    {
+        isPortrait = FALSE;
+    }
+    //  }
+    return isPortrait;
+}
+
 @end
