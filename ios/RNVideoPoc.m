@@ -1,4 +1,3 @@
-
 #import "RNVideoPoc.h"
 #import "RCTLog.h"
 #import "RCTConvert.h"
@@ -7,12 +6,14 @@
 
 @implementation RNVideoPoc
 
-// Credit to:
-// Apple docs - https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/AVFoundationPG/Articles/03_Editing.html#//apple_ref/doc/uid/TP40010188-CH8-SW18
-// Merging - https://github.com/MostWantIT/react-native-video-editor
-// Merging with video orientation - https://gist.github.com/javiersuazo/bb36083bdaa0a51d52323d997a84712e
-// Thumbnails - https://github.com/phuochau/react-native-thumbnail
-// Trimming - https://github.com/shahen94/react-native-video-processing
+/*
+Credit to:
+- Apple docs - https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/AVFoundationPG/Articles/03_Editing.html#//apple_ref/doc/uid/TP40010188-CH8-SW18
+- Merging - https://github.com/MostWantIT/react-native-video-editor
+- Merging with video orientation - https://gist.github.com/javiersuazo/bb36083bdaa0a51d52323d997a84712e
+- Thumbnails - https://github.com/phuochau/react-native-thumbnail
+- Trimming - https://github.com/shahen94/react-native-video-processing
+*/
 
 - (dispatch_queue_t)methodQueue
 {
@@ -129,7 +130,6 @@ RCT_EXPORT_METHOD(trim:(NSString *)filepath
 RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject){
-    
     @try {
         AVMutableComposition *composition = [[AVMutableComposition alloc] init];
         AVMutableCompositionTrack *videoTrack = [composition addMutableTrackWithMediaType:AVMediaTypeVideo preferredTrackID:kCMPersistentTrackID_Invalid];
@@ -190,13 +190,14 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
                 CGAffineTransform scale = CGAffineTransformMakeScale(scaleToFitRatio, scaleToFitRatio);
                 useTransform = CGAffineTransformConcat(originalTransform, scale);
             } else if (!isPortrait_ && mergedOrientationPortrait) {
-                // downscale height of landscape video to fit portrait
+                // downscale width of landscape video to fit portrait
                 double scaleToFitRatio = finalSize.height / videoWidth;
                 CGAffineTransform scale = CGAffineTransformMakeScale(scaleToFitRatio, scaleToFitRatio);
                 CGAffineTransform first = CGAffineTransformConcat(originalTransform, scale); // scale
                 
-                // FIXME - determine why first.ty is not available
-                CGAffineTransform reTransform = CGAffineTransformMakeTranslation(0.0, finalSize.height / 2 + (finalSize.height * scaleToFitRatio) / 2);
+                // TODO - determine correct method for height middling
+                double transformedVideoHeight = (1 - scaleToFitRatio) * videoHeight;
+                CGAffineTransform reTransform = CGAffineTransformMakeTranslation(0.0, finalSize.height / 2 + transformedVideoHeight / 5.5);
                 useTransform = CGAffineTransformConcat(first, reTransform); // move down
             } else if (!isPortrait_ && !mergedOrientationPortrait) {
                 // Scale same orientation videos
@@ -220,6 +221,7 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
             [videoLayerInstruction setTransform:useTransform atTime:currentTime];
             videoCompositionInstruction.layerInstructions = @[videoLayerInstruction];
             [instructions addObject:videoCompositionInstruction];
+
             currentTime = CMTimeAdd(currentTime, timeRange.duration);
         }];
         
@@ -240,14 +242,6 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
         AVMutableVideoComposition *mutableVideoComposition = [AVMutableVideoComposition videoComposition];
         mutableVideoComposition.instructions = instructions;
         mutableVideoComposition.frameDuration = CMTimeMake(1, highestFrameRate);
-//        CGSize naturalSize;
-        mutableVideoComposition.renderSize = CGSizeMake(UIScreen.mainScreen.bounds.size.width, UIScreen.mainScreen.bounds.size.height);
-
-        if (mergedOrientationPortrait) {
-            mutableVideoComposition.renderSize = CGSizeMake(UIScreen.mainScreen.bounds.size.width, UIScreen.mainScreen.bounds.size.height);
-        } else {
-            mutableVideoComposition.renderSize = finalSize;
-        }
 
         if (mergedOrientationPortrait) {
             CGSize naturalSize = CGSizeMake(finalSize.height, finalSize.width);
@@ -261,17 +255,17 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
         NSLog(@"Composition Duration: %ld seconds", lround(CMTimeGetSeconds(composition.duration)));
         NSLog(@"Composition Framerate: %d fps", highestFrameRate);
 
-        __block NSError *someErr = nil;
+        __block NSError *exportErr = nil;
         [exportSession exportAsynchronouslyWithCompletionHandler:^{
             switch (exportSession.status) {
                 case AVAssetExportSessionStatusFailed:{
-                    someErr = exportSession.error;
-                    reject(someErr.description, nil, nil);
+                    exportErr = exportSession.error;
+                    reject(exportErr.description, nil, nil);
                     break;
                 }
                 case AVAssetExportSessionStatusCancelled:{
-                    someErr = exportSession.error;
-                    reject(someErr.description, nil, nil);
+                    exportErr = exportSession.error;
+                    reject(exportErr.description, nil, nil);
                     break;
                 }
                 case AVAssetExportSessionStatusCompleted: {
@@ -304,21 +298,25 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
 -(BOOL) isVideoPortrait:(AVAssetTrack *)videoTrack{
     BOOL isPortrait = FALSE;
     CGAffineTransform t = videoTrack.preferredTransform;
+
     // Portrait
     if(t.a == 0 && t.b == 1.0 && t.c == -1.0 && t.d == 0)
     {
         isPortrait = YES;
     }
+
     // PortraitUpsideDown
     if(t.a == 0 && t.b == -1.0 && t.c == 1.0 && t.d == 0)  {
         
         isPortrait = YES;
     }
+
     // LandscapeRight
     if(t.a == 1.0 && t.b == 0 && t.c == 0 && t.d == 1.0)
     {
         isPortrait = FALSE;
     }
+
     // LandscapeLeft
     if(t.a == -1.0 && t.b == 0 && t.c == 0 && t.d == -1.0)
     {
