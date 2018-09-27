@@ -7,7 +7,8 @@
 
 @implementation RNVideoPoc
 
-// Credit to / heavily borrowed from:
+// Credit to:
+// Apple docs - https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/AVFoundationPG/Articles/03_Editing.html#//apple_ref/doc/uid/TP40010188-CH8-SW18
 // Merging - https://github.com/MostWantIT/react-native-video-editor
 // Merging with video orientation - https://gist.github.com/javiersuazo/bb36083bdaa0a51d52323d997a84712e
 // Thumbnails - https://github.com/phuochau/react-native-thumbnail
@@ -137,7 +138,6 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
         
         __block BOOL errorOccurred = NO;
         __block CMTime currentTime = kCMTimeZero;
-        __block CGSize size = CGSizeZero;
         __block int32_t highestFrameRate = 0;
         __block BOOL isPortrait_ = NO;
         __block BOOL setMergedOrientation = NO;
@@ -152,11 +152,7 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
             AVURLAsset *sourceAsset = [AVURLAsset URLAssetWithURL:fileURL options:options];
             AVAssetTrack *videoAsset = [[sourceAsset tracksWithMediaType:AVMediaTypeVideo] firstObject];
             AVAssetTrack *audioAsset = [[sourceAsset tracksWithMediaType:AVMediaTypeAudio] firstObject];
-            
-            size = videoAsset.naturalSize;
-
-            NSLog(@"Video #%lu => width: %f height: %f", idx+1, size.width, size.height);
-            
+        
             int32_t currentFrameRate = (int)roundf(videoAsset.nominalFrameRate);
             highestFrameRate = (currentFrameRate > highestFrameRate) ? currentFrameRate : highestFrameRate;
             
@@ -181,30 +177,40 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
                 finalSize = videoAsset.naturalSize;
             }
             
-            CGAffineTransform transform = videoAsset.preferredTransform;
+            double videoHeight = videoAsset.naturalSize.height;
+            double videoWidth = videoAsset.naturalSize.width;
+            CGAffineTransform originalTransform = videoAsset.preferredTransform;
             CGAffineTransform useTransform;
+            
+            // Set instructions to orient and scale properly
+            // NOTE: all video dimensions reflect that they are filmed in portrait
             if (isPortrait_ && mergedOrientationPortrait) {
-                // all video dimensions reflect that they are filmed in portrait
-                double scaleToFitRatio = finalSize.height/ videoTrack.naturalSize.height;
+                // Scale same orientation videos
+                double scaleToFitRatio = finalSize.height / videoHeight;
                 CGAffineTransform scale = CGAffineTransformMakeScale(scaleToFitRatio, scaleToFitRatio);
-                useTransform = CGAffineTransformConcat(transform, scale);
+                useTransform = CGAffineTransformConcat(originalTransform, scale);
             } else if (!isPortrait_ && mergedOrientationPortrait) {
-                double scaleToFitRatio = finalSize.height / videoTrack.naturalSize.width;
+                // downscale height of landscape video to fit portrait
+                double scaleToFitRatio = finalSize.height / videoWidth;
                 CGAffineTransform scale = CGAffineTransformMakeScale(scaleToFitRatio, scaleToFitRatio);
-                CGAffineTransform first = CGAffineTransformConcat(transform, scale); // scale
-
-                CGAffineTransform reTransform = CGAffineTransformMakeTranslation(0.0, finalSize.height / 2);
+                CGAffineTransform first = CGAffineTransformConcat(originalTransform, scale); // scale
+                
+                // FIXME - determine why first.ty is not available
+                CGAffineTransform reTransform = CGAffineTransformMakeTranslation(0.0, finalSize.height / 2 + (finalSize.height * scaleToFitRatio) / 2);
                 useTransform = CGAffineTransformConcat(first, reTransform); // move down
             } else if (!isPortrait_ && !mergedOrientationPortrait) {
-                // do nothing for natural landscape videos
-                useTransform = videoTrack.preferredTransform;
-            } else {
-                double scaleToFitRatio = finalSize.height / videoTrack.naturalSize.width;
+                // Scale same orientation videos
+                double scaleToFitRatio = finalSize.width / videoWidth;
                 CGAffineTransform scale = CGAffineTransformMakeScale(scaleToFitRatio, scaleToFitRatio);
-                CGAffineTransform first = CGAffineTransformConcat(transform, scale); // scale
+                useTransform = CGAffineTransformConcat(originalTransform, scale);
+            } else {
+                // isPortrait && !mergedOrientationPortrait
+                // downscale height of portrait video to fit landscape
+                double scaleToFitRatio = finalSize.height / videoWidth;
+                CGAffineTransform scale = CGAffineTransformMakeScale(scaleToFitRatio, scaleToFitRatio);
+                CGAffineTransform first = CGAffineTransformConcat(originalTransform, scale); // scale
 
-                // FIXME - determine the correct transform to apply here.
-                CGAffineTransform reTransform = CGAffineTransformMakeTranslation(finalSize.width / 3.0, 0.0);
+                CGAffineTransform reTransform = CGAffineTransformMakeTranslation(finalSize.width / 2 - first.tx / 2, 0.0);
                 useTransform = CGAffineTransformConcat(first, reTransform); // move right
             }
 
@@ -240,14 +246,14 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
         if (mergedOrientationPortrait) {
             mutableVideoComposition.renderSize = CGSizeMake(UIScreen.mainScreen.bounds.size.width, UIScreen.mainScreen.bounds.size.height);
         } else {
-            mutableVideoComposition.renderSize = size;
+            mutableVideoComposition.renderSize = finalSize;
         }
 
         if (mergedOrientationPortrait) {
-            CGSize naturalSize = CGSizeMake(size.height, size.width);
+            CGSize naturalSize = CGSizeMake(finalSize.height, finalSize.width);
             mutableVideoComposition.renderSize =  CGSizeMake(naturalSize.width, naturalSize.height);
         } else {
-            mutableVideoComposition.renderSize = size;
+            mutableVideoComposition.renderSize = finalSize;
         }
 
         exportSession.videoComposition = mutableVideoComposition;
