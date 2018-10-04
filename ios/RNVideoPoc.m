@@ -10,7 +10,7 @@
 Credit to:
 - Apple docs - https://developer.apple.com/library/archive/documentation/AudioVideo/Conceptual/AVFoundationPG/Articles/03_Editing.html#//apple_ref/doc/uid/TP40010188-CH8-SW18
 - Merging - https://github.com/MostWantIT/react-native-video-editor
-- Merging with video orientation - https://gist.github.com/javiersuazo/bb36083bdaa0a51d52323d997a84712e
+- Merging with video orientation -
 - Thumbnails - https://github.com/phuochau/react-native-thumbnail
 - Trimming - https://github.com/shahen94/react-native-video-processing
 */
@@ -131,6 +131,10 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
                   resolve:(RCTPromiseResolveBlock)resolve
                   reject:(RCTPromiseRejectBlock)reject){
     @try {
+        // Assume 16:9 / 9:16 final orientation ratio
+        CGFloat EXPECTED_HEIGHT = 1280.0;
+        CGFloat EXPECTED_WIDTH = 720.0;
+        
         AVMutableComposition *composition = [[AVMutableComposition alloc] init];
         AVMutableCompositionTrack *videoTrack = [composition addMutableTrackWithMediaType:AVMediaTypeVideo preferredTrackID:kCMPersistentTrackID_Invalid];
         AVMutableCompositionTrack *audioTrack = [composition addMutableTrackWithMediaType:AVMediaTypeAudio preferredTrackID:kCMPersistentTrackID_Invalid];
@@ -142,7 +146,6 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
         __block BOOL isPortrait_ = NO;
         __block BOOL setMergedOrientation = NO;
         __block BOOL mergedOrientationPortrait = NO;
-        __block CGSize finalSize;
         [fileNames enumerateObjectsUsingBlock:^(id filepath, NSUInteger idx, BOOL *stop) {
             filepath = [filepath stringByReplacingOccurrencesOfString:@"file://"
                                                                    withString:@""];
@@ -174,7 +177,6 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
             if (!setMergedOrientation) {
                 setMergedOrientation = TRUE;
                 mergedOrientationPortrait = isPortrait_;
-                finalSize = videoAsset.naturalSize;
             }
             
             double videoHeight = videoAsset.naturalSize.height;
@@ -185,33 +187,44 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
             // Set instructions to orient and scale properly
             // NOTE: all video dimensions reflect that they are filmed in portrait
             if (isPortrait_ && mergedOrientationPortrait) {
-                // Scale same orientation videos
-                double scaleToFitRatio = finalSize.height / videoHeight;
-                CGAffineTransform scale = CGAffineTransformMakeScale(scaleToFitRatio, scaleToFitRatio);
+                // force height to be in correct ratio - screen is opposite recording
+                double normalizedWidth = videoHeight;
+                double normalizedHeight = videoWidth;
+                
+                double scaleRatioHeight = EXPECTED_WIDTH / normalizedWidth;
+                double scaleRatioWidth = EXPECTED_HEIGHT / normalizedHeight;
+                CGAffineTransform scale = CGAffineTransformMakeScale(scaleRatioWidth, scaleRatioHeight);
                 useTransform = CGAffineTransformConcat(originalTransform, scale);
+                
+                // hack to fix small sizes
+                CGFloat tx = useTransform.tx;
+                if (tx > EXPECTED_WIDTH) {
+                    CGAffineTransform reTransform = CGAffineTransformMakeTranslation(EXPECTED_WIDTH - tx, 0.0);
+                    useTransform = CGAffineTransformConcat(useTransform, reTransform);
+                }
             } else if (!isPortrait_ && mergedOrientationPortrait) {
                 // downscale width of landscape video to fit portrait
-                double scaleToFitRatio = finalSize.height / videoWidth;
+                double scaleToFitRatio = EXPECTED_WIDTH / videoWidth;
+                
                 CGAffineTransform scale = CGAffineTransformMakeScale(scaleToFitRatio, scaleToFitRatio);
                 CGAffineTransform first = CGAffineTransformConcat(originalTransform, scale); // scale
                 
                 // TODO - determine correct method for height middling
-                double transformedVideoHeight = (1 - scaleToFitRatio) * videoHeight;
-                CGAffineTransform reTransform = CGAffineTransformMakeTranslation(0.0, finalSize.height / 2 + transformedVideoHeight / 5.5);
+                CGAffineTransform reTransform = CGAffineTransformMakeTranslation(0.0, EXPECTED_WIDTH / 1.75);
                 useTransform = CGAffineTransformConcat(first, reTransform); // move down
             } else if (!isPortrait_ && !mergedOrientationPortrait) {
                 // Scale same orientation videos
-                double scaleToFitRatio = finalSize.width / videoWidth;
+                double scaleToFitRatio = EXPECTED_HEIGHT / videoWidth;
                 CGAffineTransform scale = CGAffineTransformMakeScale(scaleToFitRatio, scaleToFitRatio);
                 useTransform = CGAffineTransformConcat(originalTransform, scale);
             } else {
                 // isPortrait && !mergedOrientationPortrait
                 // downscale height of portrait video to fit landscape
-                double scaleToFitRatio = finalSize.height / videoWidth;
+                double scaleToFitRatio = EXPECTED_WIDTH / videoWidth;
                 CGAffineTransform scale = CGAffineTransformMakeScale(scaleToFitRatio, scaleToFitRatio);
                 CGAffineTransform first = CGAffineTransformConcat(originalTransform, scale); // scale
 
-                CGAffineTransform reTransform = CGAffineTransformMakeTranslation(finalSize.width / 2 - first.tx / 2, 0.0);
+                CGAffineTransform reTransform = CGAffineTransformMakeTranslation(EXPECTED_WIDTH + 100 - first.tx, 0.0);
                 useTransform = CGAffineTransformConcat(first, reTransform); // move right
             }
 
@@ -236,7 +249,7 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
         NSURL * urlVideoMain = [[NSURL alloc] initFileURLWithPath: myDocumentPath];
 
         exportSession.outputURL = urlVideoMain;
-        exportSession.outputFileType = AVFileTypeMPEG4;
+        exportSession.outputFileType =  @"com.apple.quicktime-movie";
         exportSession.shouldOptimizeForNetworkUse = YES;
 
         AVMutableVideoComposition *mutableVideoComposition = [AVMutableVideoComposition videoComposition];
@@ -244,13 +257,13 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
         mutableVideoComposition.frameDuration = CMTimeMake(1, highestFrameRate);
 
         if (mergedOrientationPortrait) {
-            CGSize naturalSize = CGSizeMake(finalSize.height, finalSize.width);
-            mutableVideoComposition.renderSize =  CGSizeMake(naturalSize.width, naturalSize.height);
+            mutableVideoComposition.renderSize =  CGSizeMake(EXPECTED_WIDTH, EXPECTED_HEIGHT);
         } else {
-            mutableVideoComposition.renderSize = finalSize;
+            mutableVideoComposition.renderSize = CGSizeMake(EXPECTED_HEIGHT, EXPECTED_WIDTH);
         }
 
         exportSession.videoComposition = mutableVideoComposition;
+
         
         NSLog(@"Composition Duration: %ld seconds", lround(CMTimeGetSeconds(composition.duration)));
         NSLog(@"Composition Framerate: %d fps", highestFrameRate);
@@ -300,25 +313,24 @@ RCT_EXPORT_METHOD(merge:(NSArray *)fileNames
     CGAffineTransform t = videoTrack.preferredTransform;
 
     // Portrait
-    if(t.a == 0 && t.b == 1.0 && t.c == -1.0 && t.d == 0)
+    if (t.a == 0 && t.b == 1.0 && t.c == -1.0 && t.d == 0)
     {
         isPortrait = YES;
     }
 
     // PortraitUpsideDown
-    if(t.a == 0 && t.b == -1.0 && t.c == 1.0 && t.d == 0)  {
-        
+    if (t.a == 0 && t.b == -1.0 && t.c == 1.0 && t.d == 0)  {
         isPortrait = YES;
     }
 
     // LandscapeRight
-    if(t.a == 1.0 && t.b == 0 && t.c == 0 && t.d == 1.0)
+    if (t.a == 1.0 && t.b == 0 && t.c == 0 && t.d == 1.0)
     {
         isPortrait = FALSE;
     }
 
     // LandscapeLeft
-    if(t.a == -1.0 && t.b == 0 && t.c == 0 && t.d == -1.0)
+    if (t.a == -1.0 && t.b == 0 && t.c == 0 && t.d == -1.0)
     {
         isPortrait = FALSE;
     }
